@@ -1,0 +1,7 @@
+name: teste
+on: workflow_dispatch
+jobs:
+  ok:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "actions roda em repositorio publico"
