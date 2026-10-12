@@ -1,0 +1,95 @@
+# Vigia de fora da maquina.
+#
+# A maquina grava pulso-publico.json neste repositorio uma vez por hora (so a hora e dois sim/nao). Este
+# workflow roda na infraestrutura do GitHub, fora da maquina, de 3 em 3 horas, e alarma pela AUSENCIA do
+# sinal: nao precisa que a maquina consiga pedir socorro.
+#
+# Repositorio publico porque Actions em repositorio publico nao tem custo. Fonte deste arquivo e do decidir.cjs:
+# repositorio privado da maquina (pasta batimento-publico), com teste na CI de la.
+#
+# Aviso: abre uma issue por alarme (rotulo proprio) e, com alarme critico, a conferencia FALHA de proposito
+# para o e-mail de "Run failed" chegar ao dono (o e-mail de issue nao chegava).
+
+name: vigia de fora
+
+on:
+  schedule:
+    # 3h = tres pulsos perdidos (o pulso publico e de hora em hora). O e-mail de falha de workflow agendado vai
+    # para quem mudou por ultimo esta linha.
+    - cron: '13 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      ensaio_alarme:
+        description: 'Mandar um e-mail de TESTE do alarme (a conferencia falha de proposito com texto de ensaio)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+# Duas conferencias ao mesmo tempo (agenda + disparo manual) listariam zero issues e abririam duas.
+concurrency:
+  group: vigia-de-fora
+  cancel-in-progress: false
+
+jobs:
+  conferir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ler o pulso e decidir
+        id: ler
+        run: node decidir.cjs
+
+      - name: Abrir, comentar ou fechar cada alarme
+        uses: actions/github-script@v7
+        env:
+          ALARMES: ${{ steps.ler.outputs.alarmes }}
+        with:
+          script: |
+            const { mudou } = require(`${process.env.GITHUB_WORKSPACE}/decidir.cjs`);
+            const alarmes = JSON.parse(process.env.ALARMES || '[]');
+            if (!alarmes.length) throw new Error('a decisao nao devolveu alarmes: o vigia nao pode ficar mudo');
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const ORIENTACAO = {
+              'pulso-morto': ['A máquina está ligada e com internet? Peça a uma sessão na máquina para conferir o pulso externo.'],
+              'frota-parada': ['A máquina está ligada, mas as rotinas não estão rodando. Peça a uma sessão na máquina para conferir a frota.'],
+              'observador-cego': ['O pulso chega, mas um vigia da máquina não está conseguindo olhar. Não é emergência, é ponto cego.'],
+            };
+            for (const a of alarmes) {
+              if (a.estado === 'desconhecido') continue; // maquina muda: nem abre nem fecha
+              const { data: abertas } = await github.rest.issues.listForRepo({ ...repo, state: 'open', labels: a.rotulo, per_page: 10 });
+              if (a.estado === 'ativo') {
+                if (!abertas.length) {
+                  try { await github.rest.issues.createLabel({ ...repo, name: a.rotulo, color: a.rotulo === 'observador-cego' ? 'fbca04' : 'b60205' }); }
+                  catch (e) { if (e.status !== 422) throw e; } // 422 = o rotulo ja existe: segue
+                  const corpo = [`**Motivo:** ${a.motivo}`, '', '---',
+                    'Este aviso foi escrito pela infraestrutura do GitHub, **não** pela máquina.',
+                    '', ...(ORIENTACAO[a.rotulo] || [])].join('\n');
+                  await github.rest.issues.create({ ...repo, title: a.titulo, body: corpo, labels: [a.rotulo] });
+                } else {
+                  const { data: coms } = await github.rest.issues.listComments({ ...repo, issue_number: abertas[0].number, per_page: 100 });
+                  const ultimo = coms.length ? coms[coms.length - 1].body : abertas[0].body;
+                  if (mudou(a.motivo, ultimo)) {
+                    await github.rest.issues.createComment({ ...repo, issue_number: abertas[0].number, body: `Mudou: ${a.motivo}` });
+                  }
+                }
+              } else {
+                for (const i of abertas) {
+                  // Voltar tambem e noticia: sem isto o dono nunca sabe se resolveu ou se so parou de olhar.
+                  await github.rest.issues.createComment({ ...repo, issue_number: i.number, body: 'Voltou ao normal nesta conferência.' });
+                  await github.rest.issues.update({ ...repo, issue_number: i.number, state: 'closed' });
+                }
+              }
+            }
+
+      # Roda mesmo se o passo das issues falhar: o grito nao depende da API de issues.
+      - name: Gritar por e-mail (falha de proposito) se a maquina ou as rotinas pararam
+        if: always()
+        env:
+          ALARMES: ${{ steps.ler.outputs.alarmes }}
+          ENSAIO: ${{ inputs.ensaio_alarme }}
+        run: node decidir.cjs --gritar
