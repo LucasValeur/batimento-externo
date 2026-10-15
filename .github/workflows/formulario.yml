@@ -1,0 +1,85 @@
+name: formulario no ar
+
+# Vigia de fora do formulario (15/10/2026): a cada 10 minutos, do GitHub, abre a pagina publica e grava um evento de
+# sonda. Fora do ar em 3 tentativas: abre issue e FALHA a rodada (o e-mail de "Run failed" e o que chega). Com a
+# issue aberta, grita de novo a cada 2 h; quando volta, fecha. Regras em formulario.cjs.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      ensaio_alarme:
+        description: 'Mandar um e-mail de TESTE do alarme do formulario'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: formulario-no-ar
+  cancel-in-progress: false
+
+jobs:
+  sondar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Abrir a pagina e gravar um evento de sonda
+        id: sonda
+        run: node formulario.cjs
+
+      - name: Abrir, comentar ou fechar o alarme
+        id: alarme
+        uses: actions/github-script@v7
+        env:
+          RESULTADO: ${{ steps.sonda.outputs.resultado }}
+          ENSAIO: ${{ inputs.ensaio_alarme }}
+        with:
+          script: |
+            const { decidirAlarme, ROTULO } = require(`${process.env.GITHUB_WORKSPACE}/formulario.cjs`);
+            let r = null;
+            try { r = JSON.parse(process.env.RESULTADO || ''); } catch { r = null; }
+            // Sonda que nao produziu resultado tambem e alarme: vigia mudo e o que este arquivo existe para impedir.
+            if (!r || typeof r.ok !== 'boolean') r = { ok: false, motivos: ['a sonda nao produziu resultado legivel'] };
+            if (process.env.ENSAIO === 'true') {
+              core.setOutput('gritar', 'true');
+              core.setOutput('motivo', 'ENSAIO: este e-mail e um teste do alarme do formulario. Nada esta quebrado.');
+              return;
+            }
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const { data: abertas } = await github.rest.issues.listForRepo({ ...repo, state: 'open', labels: ROTULO, per_page: 5 });
+            const aberta = abertas[0] || null;
+            let ultimoGritoMs = 0;
+            if (aberta) {
+              const { data: coms } = await github.rest.issues.listComments({ ...repo, issue_number: aberta.number, per_page: 100 });
+              ultimoGritoMs = Date.parse((coms.length ? coms[coms.length - 1] : aberta).created_at) || 0;
+            }
+            const d = decidirAlarme({ ok: r.ok, issueAberta: !!aberta, ultimoGritoMs, agoraMs: Date.now() });
+            const motivo = (r.motivos || []).join(' | ') || 'sem detalhe';
+            if (d.acao === 'abrir') {
+              try { await github.rest.issues.createLabel({ ...repo, name: ROTULO, color: 'b60205' }); }
+              catch (e) { if (e.status !== 422) throw e; }
+              await github.rest.issues.create({ ...repo, labels: [ROTULO],
+                title: '🚨 O formulario de leads esta fora do ar',
+                body: [`**Motivo:** ${motivo}`, '', 'Quem clica no anuncio ve erro. Verificado do GitHub, fora da maquina que serve o formulario.',
+                  '', '1. A maquina esta ligada e com internet?', '2. Peca a uma sessao na maquina: "o formulario esta fora do ar".'].join('\n') });
+            } else if (d.acao === 'comentar') {
+              await github.rest.issues.createComment({ ...repo, issue_number: aberta.number, body: `**Motivo:** ${motivo} (ainda fora)` });
+            } else if (d.acao === 'fechar') {
+              await github.rest.issues.createComment({ ...repo, issue_number: aberta.number, body: 'Voltou: a pagina abre e o envio grava.' });
+              await github.rest.issues.update({ ...repo, issue_number: aberta.number, state: 'closed' });
+            }
+            core.setOutput('gritar', d.gritar ? 'true' : 'false');
+            core.setOutput('motivo', motivo.replace(/[\r\n]+/g, ' ').replace(/::/g, ': :').slice(0, 900));
+
+      - name: Gritar por e-mail
+        if: steps.alarme.outputs.gritar == 'true'
+        env:
+          MOTIVO: ${{ steps.alarme.outputs.motivo }}
+        run: |
+          echo "::error title=FORMULARIO DE LEADS FORA DO AR::$MOTIVO"
+          exit 1
