@@ -25,6 +25,9 @@ async function sondarUmaVez(url, fetchImpl = fetch) {
     const corpo = await r.text();
     if (r.status !== 200) return { ok: false, motivo: `a pagina respondeu HTTP ${r.status}` };
     if (!corpo.includes(MARCA)) return { ok: false, motivo: 'a pagina respondeu 200 mas sem o formulario dentro' };
+    // Pagina servida pela RESERVA na borda: o visitante ve o formulario, mas a maquina esta fora e nada chega ao CRM.
+    if (r.headers && typeof r.headers.get === 'function' && r.headers.get('x-formulario-origem') === 'reserva')
+      return { ok: false, motivo: 'a maquina esta fora: a reserva mostra o formulario e guarda os envios, mas nada chega ao CRM ate ela voltar' };
   } catch (e) {
     return { ok: false, motivo: `a pagina nao respondeu (${String((e && e.name) || 'erro')})` };
   }
