@@ -12,6 +12,10 @@ on:
         description: 'Mandar um e-mail de TESTE do alarme do formulario'
         type: boolean
         default: false
+      motivo_borda:
+        description: 'Preenchido pela Cloudflare quando a maquina falha 2 vezes seguidas (vigia a cada 5 min)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -30,6 +34,7 @@ jobs:
 
       - name: Abrir a pagina e gravar um evento de sonda
         id: sonda
+        if: inputs.motivo_borda == ''
         run: node formulario.cjs
 
       - name: Abrir, comentar ou fechar o alarme
@@ -37,6 +42,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           RESULTADO: ${{ steps.sonda.outputs.resultado }}
+          MOTIVO_BORDA: ${{ inputs.motivo_borda }}
           ENSAIO: ${{ inputs.ensaio_alarme }}
         with:
           script: |
@@ -44,6 +50,8 @@ jobs:
             let r = null;
             try { r = JSON.parse(process.env.RESULTADO || ''); } catch { r = null; }
             // Sonda que nao produziu resultado tambem e alarme: vigia mudo e o que este arquivo existe para impedir.
+            // A Cloudflare (vigia de 5 em 5 min) ja viu a maquina falhar duas vezes: o motivo dela vale como a sonda.
+            if (process.env.MOTIVO_BORDA) r = { ok: false, motivos: [process.env.MOTIVO_BORDA] };
             if (!r || typeof r.ok !== 'boolean') r = { ok: false, motivos: ['a sonda nao produziu resultado legivel'] };
             if (process.env.ENSAIO === 'true') {
               core.setOutput('gritar', 'true');
