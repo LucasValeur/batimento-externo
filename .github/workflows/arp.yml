@@ -12,6 +12,11 @@ on:
         description: resumo sem dados pessoais
         required: true
         type: string
+      ensaio_alarme:
+        description: testar o e-mail de falha sem abrir issue
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,8 +37,14 @@ jobs:
         env:
           ESTADO: ${{ inputs.estado }}
           MOTIVO_ARP: ${{ inputs.motivo_arp }}
+          ENSAIO: ${{ inputs.ensaio_alarme }}
         with:
           script: |
+            if (process.env.ENSAIO === 'true') {
+              core.setOutput('gritar', 'true');
+              core.setOutput('ensaio', 'true');
+              return;
+            }
             const repo = { owner: context.repo.owner, repo: context.repo.repo };
             const rotulo = 'arp-saude';
             const motivo = String(process.env.MOTIVO_ARP || 'sem detalhe').replace(/[\r\n]+/g, ' ').slice(0, 500);
@@ -57,6 +68,12 @@ jobs:
 
       - name: Avisar responsavel pelo GitHub
         if: steps.estado.outputs.gritar == 'true'
+        env:
+          ENSAIO: ${{ steps.estado.outputs.ensaio }}
         run: |
+          if [ "$ENSAIO" = "true" ]; then
+            echo "::error title=ENSAIO VIGIA ARP::Teste de entrega do aviso. A ponte ARP nao foi alterada."
+            exit 1
+          fi
           echo "::error title=SAUDE DA ARP EM ALARME::O vigia externo registrou uma issue arp-saude neste repositorio."
           exit 1
