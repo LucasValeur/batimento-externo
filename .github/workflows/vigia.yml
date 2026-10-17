@@ -9,6 +9,7 @@
 #
 # Aviso: abre uma issue por alarme (rotulo proprio) e, com alarme critico, a conferencia FALHA de proposito
 # para o e-mail de "Run failed" chegar ao dono (o e-mail de issue nao chegava).
+# Dono desde 17/10/2026: conta OpsClients (ia@valeur.com.br). O e-mail de rodada agendada que falha vai para ela.
 
 name: vigia de fora
 
