@@ -1,0 +1,62 @@
+name: vigia externo ARP
+
+on:
+  workflow_dispatch:
+    inputs:
+      estado:
+        description: alarme ou recuperado
+        required: true
+        type: choice
+        options: [alarme, recuperado]
+      motivo_arp:
+        description: resumo sem dados pessoais
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: vigia-externo-arp
+  cancel-in-progress: false
+
+jobs:
+  avisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Registrar alarme ou recuperacao
+        id: estado
+        uses: actions/github-script@v7
+        env:
+          ESTADO: ${{ inputs.estado }}
+          MOTIVO_ARP: ${{ inputs.motivo_arp }}
+        with:
+          script: |
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const rotulo = 'arp-saude';
+            const motivo = String(process.env.MOTIVO_ARP || 'sem detalhe').replace(/[\r\n]+/g, ' ').slice(0, 500);
+            const { data: abertas } = await github.rest.issues.listForRepo({ ...repo, state: 'open', labels: rotulo, per_page: 5 });
+            if (process.env.ESTADO === 'alarme') {
+              if (!abertas.length) {
+                try { await github.rest.issues.createLabel({ ...repo, name: rotulo, color: 'b60205' }); }
+                catch (e) { if (e.status !== 422) throw e; }
+                await github.rest.issues.create({ ...repo, title: 'Saude da ponte ARP requer atencao', labels: [rotulo],
+                  body: `O vigia na Cloudflare encontrou: ${motivo}\n\nA ponte ou seu banco pode estar indisponivel. Conferir antes de executar qualquer rotina manual.` });
+              } else {
+                await github.rest.issues.createComment({ ...repo, issue_number: abertas[0].number, body: `Ainda em alarme: ${motivo}` });
+              }
+              core.setOutput('gritar', 'true');
+            } else if (process.env.ESTADO === 'recuperado') {
+              for (const issue of abertas) {
+                await github.rest.issues.createComment({ ...repo, issue_number: issue.number, body: 'Vigia externo: a saude da ARP voltou ao normal.' });
+                await github.rest.issues.update({ ...repo, issue_number: issue.number, state: 'closed' });
+              }
+            } else throw new Error('estado invalido');
+
+      - name: Avisar responsavel pelo GitHub
+        if: steps.estado.outputs.gritar == 'true'
+        run: |
+          echo "::error title=SAUDE DA ARP EM ALARME::O vigia externo registrou uma issue arp-saude neste repositorio."
+          exit 1
