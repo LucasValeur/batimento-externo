@@ -54,7 +54,7 @@ jobs:
                 try { await github.rest.issues.createLabel({ ...repo, name: rotulo, color: 'b60205' }); }
                 catch (e) { if (e.status !== 422) throw e; }
                 await github.rest.issues.create({ ...repo, title: 'Saude da ponte ARP requer atencao', labels: [rotulo],
-                  body: `O vigia na Cloudflare encontrou: ${motivo}\n\nA ponte ou seu banco pode estar indisponivel. Conferir antes de executar qualquer rotina manual.` });
+                  body: `O vigia na Cloudflare encontrou: ${motivo}\n\nA saude da ARP inclui indisponibilidade, clientes sem resposta e pendencias de revisao. Conferir o achado antes de executar qualquer rotina manual.` });
               } else {
                 await github.rest.issues.createComment({ ...repo, issue_number: abertas[0].number, body: `Ainda em alarme: ${motivo}` });
               }
